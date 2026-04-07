@@ -24,6 +24,8 @@ from typing import Annotated, Literal
 
 from fastmcp import FastMCP
 from pydantic import Field
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from brain_processor import BrainFileProcessor
 
@@ -41,6 +43,16 @@ mcp = FastMCP(
 )
 
 _processor = BrainFileProcessor()
+
+
+# ---------------------------------------------------------------------------
+# Health endpoint (used by Docker HEALTHCHECK)
+# ---------------------------------------------------------------------------
+
+@mcp.custom_route("/health", methods=["GET"], include_in_schema=False)
+async def health(request: Request) -> JSONResponse:
+    """Lightweight liveness probe — always returns HTTP 200 when the server is up."""
+    return JSONResponse({"status": "ok"})
 
 # ---------------------------------------------------------------------------
 # Tool definition
