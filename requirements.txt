@@ -1,0 +1,8 @@
+# Runtime dependencies
+fastmcp>=3.2.0
+nibabel>=5.0.0
+numpy>=1.24.0
+
+# Testing (not needed at runtime)
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
