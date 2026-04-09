@@ -4,7 +4,7 @@ Unit tests for brain_processor.py.
 Tests cover:
 - _normalize
 - _ensure_3d
-- _build_result
+- _build_result  (Elektron/Photon energetic maps + file_info)
 - BrainFileProcessor.detect_format
 - BrainFileProcessor.process with NumPy format
 - BrainFileProcessor.process with NIfTI format
@@ -21,6 +21,10 @@ import pytest
 
 from brain_processor import (
     BrainFileProcessor,
+    _ELECTRON_ENERGY_KEV,
+    _ELECTRON_FREQ_HZ,
+    _PHOTON_ENERGY_KEV,
+    _PHOTON_FREQ_HZ,
     _build_result,
     _ensure_3d,
     _normalize,
@@ -108,27 +112,89 @@ class TestBuildResult:
         inner = _build_result(data)["data:3d"]
         assert inner["amount_positions"] == z * y * x
 
+    def test_energetic_map_has_elektron_and_photon(self):
+        data = self._make_data((2, 3, 4))
+        emap = _build_result(data)["data:3d"]["energetic_map"]
+        assert "Elektron" in emap
+        assert "Photon" in emap
+
     def test_energetic_map_length(self):
         z, y, x = 2, 3, 4
         data = self._make_data((z, y, x))
-        inner = _build_result(data)["data:3d"]
-        assert len(inner["energetic_map"]) == z * y * x
+        emap = _build_result(data)["data:3d"]["energetic_map"]
+        assert len(emap["Elektron"]) == z * y * x
+        assert len(emap["Photon"]) == z * y * x
 
     def test_energetic_map_key_format(self):
         data = self._make_data((1, 2, 3))
-        inner = _build_result(data)["data:3d"]
-        for key in inner["energetic_map"]:
-            # Expect format "(x,y,z)" with integer components
-            assert key.startswith("(") and key.endswith(")")
-            parts = key[1:-1].split(",")
-            assert len(parts) == 3
-            assert all(p.isdigit() for p in parts)
+        emap = _build_result(data)["data:3d"]["energetic_map"]
+        for channel in ("Elektron", "Photon"):
+            for key in emap[channel]:
+                assert key.startswith("(") and key.endswith(")")
+                parts = key[1:-1].split(",")
+                assert len(parts) == 3
+                assert all(p.isdigit() for p in parts)
 
-    def test_energetic_strength_range(self):
+    def test_energetic_map_entry_structure(self):
+        """Each entry must be [[e_strength], [frequency]] — two single-element lists."""
+        data = self._make_data((1, 2, 2))
+        emap = _build_result(data)["data:3d"]["energetic_map"]
+        for channel in ("Elektron", "Photon"):
+            for val in emap[channel].values():
+                assert isinstance(val, list) and len(val) == 2
+                e_strengths, frequencies = val
+                assert isinstance(e_strengths, list) and len(e_strengths) == 1
+                assert isinstance(frequencies, list) and len(frequencies) == 1
+
+    def test_elektron_energy_range(self):
+        """Elektron e_strength must be in [0, _ELECTRON_ENERGY_KEV]."""
         data = self._make_data((3, 4, 5))
+        emap = _build_result(data)["data:3d"]["energetic_map"]["Elektron"]
+        for val in emap.values():
+            assert 0.0 <= val[0][0] <= _ELECTRON_ENERGY_KEV
+
+    def test_photon_energy_range(self):
+        """Photon e_strength must be in [0, _PHOTON_ENERGY_KEV]."""
+        data = self._make_data((3, 4, 5))
+        emap = _build_result(data)["data:3d"]["energetic_map"]["Photon"]
+        for val in emap.values():
+            assert 0.0 <= val[0][0] <= _PHOTON_ENERGY_KEV
+
+    def test_elektron_frequency_range(self):
+        """Elektron frequency must be in [0, _ELECTRON_FREQ_HZ]."""
+        data = self._make_data((2, 3, 4))
+        emap = _build_result(data)["data:3d"]["energetic_map"]["Elektron"]
+        for val in emap.values():
+            assert 0.0 <= val[1][0] <= _ELECTRON_FREQ_HZ
+
+    def test_photon_frequency_range(self):
+        """Photon frequency must be in [0, _PHOTON_FREQ_HZ]."""
+        data = self._make_data((2, 3, 4))
+        emap = _build_result(data)["data:3d"]["energetic_map"]["Photon"]
+        for val in emap.values():
+            assert 0.0 <= val[1][0] <= _PHOTON_FREQ_HZ
+
+    def test_constant_array_all_zero_energy(self):
+        """Constant intensity → min-max normalises to 0 → all energies are 0."""
+        data = np.ones((2, 3, 3)) * 5.0
+        emap = _build_result(data)["data:3d"]["energetic_map"]
+        for channel in ("Elektron", "Photon"):
+            for val in emap[channel].values():
+                assert val[0][0] == pytest.approx(0.0)
+                assert val[1][0] == pytest.approx(0.0)
+
+    def test_file_info_included_when_provided(self):
+        data = self._make_data((2, 3, 4))
+        info = {"format": "numpy", "size_bytes": 100, "original_shape": [2, 3, 4], "dtype": "float64"}
+        inner = _build_result(data, file_info=info)["data:3d"]
+        assert "file_info" in inner
+        assert inner["file_info"]["format"] == "numpy"
+        assert inner["file_info"]["size_bytes"] == 100
+
+    def test_file_info_absent_when_not_provided(self):
+        data = self._make_data((2, 3, 4))
         inner = _build_result(data)["data:3d"]
-        for val in inner["energetic_map"].values():
-            assert 0.0 <= val <= 1.0
+        assert "file_info" not in inner
 
     def test_2d_input_wrapped(self):
         data = np.ones((4, 5)) * 3
@@ -184,7 +250,8 @@ class TestBrainFileProcessor:
         inner = result["data:3d"]
         assert inner["height"] == 4
         assert inner["amount_positions"] == 4 * 8 * 8
-        assert len(inner["energetic_map"]) == 4 * 8 * 8
+        assert len(inner["energetic_map"]["Elektron"]) == 4 * 8 * 8
+        assert len(inner["energetic_map"]["Photon"]) == 4 * 8 * 8
 
     def test_process_numpy_2d(self):
         arr = np.eye(5)
@@ -209,13 +276,29 @@ class TestBrainFileProcessor:
         with pytest.raises(ValueError, match="Unsupported file format"):
             self.processor.process(b"\x00" * 100, file_format="dicom")
 
-    def test_energetic_map_values_in_01(self):
+    def test_energetic_map_values_in_range(self):
         rng = np.random.default_rng(7)
         arr = rng.integers(0, 1000, size=(3, 5, 5)).astype(np.float64)
         raw = self._numpy_bytes(arr)
         result = self.processor.process(raw, file_format="numpy")
-        for v in result["data:3d"]["energetic_map"].values():
-            assert 0.0 <= v <= 1.0
+        emap = result["data:3d"]["energetic_map"]
+        for channel, max_energy, max_freq in (
+            ("Elektron", _ELECTRON_ENERGY_KEV, _ELECTRON_FREQ_HZ),
+            ("Photon", _PHOTON_ENERGY_KEV, _PHOTON_FREQ_HZ),
+        ):
+            for val in emap[channel].values():
+                assert 0.0 <= val[0][0] <= max_energy
+                assert 0.0 <= val[1][0] <= max_freq
+
+    def test_process_file_info_present(self):
+        arr = np.ones((2, 3, 4))
+        raw = self._numpy_bytes(arr)
+        result = self.processor.process(raw, file_format="numpy")
+        info = result["data:3d"]["file_info"]
+        assert info["format"] == "numpy"
+        assert info["size_bytes"] == len(raw)
+        assert info["original_shape"] == [2, 3, 4]
+        assert "dtype" in info
 
     # -- process with NIfTI format ------------------------------------------
 
@@ -236,4 +319,10 @@ class TestBrainFileProcessor:
         # to height.  The exact shape depends on how nibabel loads the data.
         assert inner["height"] > 0
         assert inner["amount_positions"] > 0
-        assert isinstance(inner["energetic_map"], dict)
+        emap = inner["energetic_map"]
+        assert "Elektron" in emap
+        assert "Photon" in emap
+        assert isinstance(emap["Elektron"], dict)
+        assert isinstance(emap["Photon"], dict)
+        # file_info must be present and carry nifti format
+        assert inner["file_info"]["format"] == "nifti"

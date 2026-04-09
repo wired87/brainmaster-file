@@ -82,7 +82,7 @@ def process_brain_file(
         ),
     ] = None,
 ) -> dict:
-    """Process a research SPECT brain output file and return a 3-D energetic map.
+    """Process a research SPECT/PET brain output file and return a 3-D energetic map.
 
     The tool performs the following steps:
 
@@ -91,7 +91,8 @@ def process_brain_file(
     3. Infers the pixel count of each 2-D slice (screen) and assembles the
        full 3-D volume.
     4. Normalises each voxel's intensity to an energetic strength in [0, 1].
-    5. Returns the structured result.
+    5. Builds per-voxel **Elektron** and **Photon** energy/frequency channels.
+    6. Returns the structured result as a JSON-serialisable dict.
 
     Returns
     -------
@@ -99,20 +100,42 @@ def process_brain_file(
 
     * ``height`` — number of z-slices (screens) in the 3-D volume.
     * ``amount_positions`` — total number of voxels (height × rows × cols).
-    * ``energetic_map`` — direct ``dict[str, float]`` mapping every voxel
-      position ``"(x,y,z)"`` to its normalised energetic strength value.
+    * ``energetic_map`` — dict with two particle-type keys:
+
+      * ``"Elektron"`` — Elektron (electron) energy channel.
+        Each entry: ``"(x,y,z)": [[e_strength_keV], [frequency_Hz]]``
+        Energy scaled to 511 keV (electron rest-mass) at max voxel intensity.
+      * ``"Photon"`` — gamma-photon energy channel (Tc-99m SPECT).
+        Each entry: ``"(x,y,z)": [[e_strength_keV], [frequency_Hz]]``
+        Energy scaled to 140.5 keV at max voxel intensity.
+
+    * ``file_info`` — metadata of the received file:
+      ``format``, ``size_bytes``, ``original_shape``, ``dtype``.
 
     Example response
     ----------------
     ```json
     {
       "data:3d": {
-        "height": 128,
-        "amount_positions": 8388608,
+        "height": 4,
+        "amount_positions": 192,
         "energetic_map": {
-          "(0,0,0)": 0.234567,
-          "(1,0,0)": 0.456789,
-          ...
+          "Elektron": {
+            "(0,0,0)": [[119.81], [2.98e+19]],
+            "(1,0,0)": [[233.24], [5.81e+19]],
+            "...": "..."
+          },
+          "Photon": {
+            "(0,0,0)": [[32.94], [7.98e+18]],
+            "(1,0,0)": [[64.04], [1.55e+19]],
+            "...": "..."
+          }
+        },
+        "file_info": {
+          "format": "nifti",
+          "size_bytes": 2097152,
+          "original_shape": [128, 128, 4],
+          "dtype": "float64"
         }
       }
     }
