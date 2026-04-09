@@ -40,10 +40,12 @@ Brain SPECT file (NIfTI / NumPy)
            │
            ▼
  Normalise voxel intensities → [0, 1]
- (energetic strength per position)
+  → build Elektron/Photon energetic maps
+  (e_strength_keV, frequency_Hz per voxel)
            │
            ▼
- Return data:3d {height, amount_positions, energetic_map}
+ Return data:3d {height, amount_positions,
+   energetic_map {Elektron, Photon}, file_info}
 ```
 
 ---
@@ -155,13 +157,25 @@ bytes (gzip header → NIfTI; NumPy magic → NumPy).
 ```json
 {
   "data:3d": {
-    "height": 128,
-    "amount_positions": 8388608,
+    "height": 4,
+    "amount_positions": 192,
     "energetic_map": {
-      "(0,0,0)": 0.234567,
-      "(1,0,0)": 0.456789,
-      "(0,1,0)": 0.123456,
-      "...": "..."
+      "Elektron": {
+        "(0,0,0)": [[119.81], [2.98e+19]],
+        "(1,0,0)": [[233.24], [5.81e+19]],
+        "...": "..."
+      },
+      "Photon": {
+        "(0,0,0)": [[32.94], [7.98e+18]],
+        "(1,0,0)": [[64.04], [1.55e+19]],
+        "...": "..."
+      }
+    },
+    "file_info": {
+      "format": "nifti",
+      "size_bytes": 2097152,
+      "original_shape": [128, 128, 4],
+      "dtype": "float64"
     }
   }
 }
@@ -171,7 +185,12 @@ bytes (gzip header → NIfTI; NumPy magic → NumPy).
 |---|---|---|
 | `height` | `int` | Number of z-slices (screens) in the 3-D volume |
 | `amount_positions` | `int` | Total voxels: `height × rows × cols` |
-| `energetic_map` | `dict[str, float]` | Energetic strength per voxel. Key format: `"(x,y,z)"`. Values are normalised to **[0, 1]** (0 = minimum intensity, 1 = maximum intensity) |
+| `energetic_map.Elektron` | `dict[str, list]` | Elektron (electron) energy channel. Key: `"(x,y,z)"`. Value: `[[e_strength_keV], [frequency_Hz]]`. Energy scaled to **511 keV** (electron rest-mass) at maximum intensity |
+| `energetic_map.Photon` | `dict[str, list]` | Gamma-photon energy channel (Tc-99m SPECT). Key: `"(x,y,z)"`. Value: `[[e_strength_keV], [frequency_Hz]]`. Energy scaled to **140.5 keV** at maximum intensity |
+| `file_info.format` | `str` | Detected/specified file format (`"nifti"` or `"numpy"`) |
+| `file_info.size_bytes` | `int` | Raw byte size of the received file |
+| `file_info.original_shape` | `list[int]` | Array shape as loaded from the file (before 3-D normalisation) |
+| `file_info.dtype` | `str` | NumPy dtype string of the loaded array |
 
 ---
 
@@ -182,7 +201,7 @@ pip install -r requirements.txt
 python -m pytest tests/ -v
 ```
 
-Expected output: **33 passed**.
+Expected output: **43 passed**.
 
 ---
 

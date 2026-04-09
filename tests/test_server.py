@@ -13,6 +13,7 @@ import io
 import numpy as np
 import pytest
 
+from brain_processor import _ELECTRON_ENERGY_KEV, _PHOTON_ENERGY_KEV
 from server import process_brain_file
 
 
@@ -34,7 +35,9 @@ class TestProcessBrainFileTool:
         inner = result["data:3d"]
         assert inner["height"] == 4
         assert inner["amount_positions"] == 4 * 6 * 6
-        assert len(inner["energetic_map"]) == 4 * 6 * 6
+        emap = inner["energetic_map"]
+        assert len(emap["Elektron"]) == 4 * 6 * 6
+        assert len(emap["Photon"]) == 4 * 6 * 6
 
     def test_auto_detect_numpy(self):
         arr = np.ones((2, 3, 4))
@@ -60,8 +63,11 @@ class TestProcessBrainFileTool:
             file_content=_b64_numpy(arr),
             file_format="numpy",
         )
-        for v in result["data:3d"]["energetic_map"].values():
-            assert 0.0 <= v <= 1.0
+        emap = result["data:3d"]["energetic_map"]
+        for val in emap["Elektron"].values():
+            assert 0.0 <= val[0][0] <= _ELECTRON_ENERGY_KEV
+        for val in emap["Photon"].values():
+            assert 0.0 <= val[0][0] <= _PHOTON_ENERGY_KEV
 
     def test_constant_array_energetic_strength_is_zero(self):
         arr = np.full((2, 4, 4), 7.0)
@@ -69,8 +75,11 @@ class TestProcessBrainFileTool:
             file_content=_b64_numpy(arr),
             file_format="numpy",
         )
-        for v in result["data:3d"]["energetic_map"].values():
-            assert v == pytest.approx(0.0)
+        emap = result["data:3d"]["energetic_map"]
+        for channel in ("Elektron", "Photon"):
+            for val in emap[channel].values():
+                assert val[0][0] == pytest.approx(0.0)
+                assert val[1][0] == pytest.approx(0.0)
 
     def test_none_file_format_uses_autodetect(self):
         arr = np.zeros((2, 4, 4))
@@ -79,3 +88,13 @@ class TestProcessBrainFileTool:
             file_format=None,
         )
         assert "data:3d" in result
+
+    def test_file_info_in_response(self):
+        arr = np.ones((2, 3, 4))
+        b64 = _b64_numpy(arr)
+        result = process_brain_file(file_content=b64, file_format="numpy")
+        info = result["data:3d"]["file_info"]
+        assert info["format"] == "numpy"
+        assert info["size_bytes"] > 0
+        assert info["original_shape"] == [2, 3, 4]
+        assert "dtype" in info

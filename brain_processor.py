@@ -4,6 +4,20 @@ Brain file processor for research SPECT brain output files.
 Accepts brain scan data (NIfTI or NumPy format), infers the number of pixels
 in each 2D slice, assembles a 3D representation, and computes a per-voxel
 energetic strength map suitable for downstream analysis.
+
+The energetic map is split into two particle channels:
+
+* **Elektron** — Elektron (electron) kinetic-energy proxy, scaled to 511 keV (electron
+  rest-mass equivalent) at maximum voxel intensity.
+* **Photon** — SPECT gamma-photon energy proxy, scaled to 140.5 keV (Tc-99m
+  characteristic emission) at maximum voxel intensity.
+
+For each voxel position ``(x, y, z)`` both channels carry::
+
+    [[e_strength_keV], [frequency_Hz]]
+
+where a single-element list is used to keep the schema extensible to
+multi-component decompositions.
 """
 
 from __future__ import annotations
@@ -14,6 +28,21 @@ import tempfile
 from typing import Union
 
 import numpy as np
+
+# ---------------------------------------------------------------------------
+# Physical constants (SPECT simulation)
+# ---------------------------------------------------------------------------
+
+# Elektron (electron) rest-mass energy (keV)
+_ELECTRON_ENERGY_KEV: float = 511.0
+# Frequency corresponding to electron rest-mass energy via E = h·f
+# h = 6.626e-34 J·s;  511 keV = 511e3 × 1.602e-19 J
+_ELECTRON_FREQ_HZ: float = 1.2356e20
+
+# Tc-99m characteristic gamma-photon energy (keV) — standard SPECT tracer
+_PHOTON_ENERGY_KEV: float = 140.5
+# Frequency corresponding to 140.5 keV photon via E = h·f
+_PHOTON_FREQ_HZ: float = 3.397e19
 
 
 # ---------------------------------------------------------------------------
@@ -50,24 +79,41 @@ def _ensure_3d(data: np.ndarray) -> np.ndarray:
     )
 
 
-def _build_result(data: np.ndarray) -> dict:
+def _build_result(data: np.ndarray, file_info: dict | None = None) -> dict:
     """Convert a (potentially N-D) numpy array into the MCP response dict.
 
     The returned structure is::
 
         {
             "data:3d": {
-                "height": <int>,          # number of z-slices (screens)
+                "height": <int>,           # number of z-slices (screens)
                 "amount_positions": <int>, # total voxels in the volume
-                "energetic_map": {         # dict[str(pos), float]
-                    "(x,y,z)": <float>,
-                    ...
+                "energetic_map": {
+                    "Elektron": {          # Elektron (electron) energy channel
+                        "(x,y,z)": [[e_strength_keV], [frequency_Hz]],
+                        ...
+                    },
+                    "Photon": {            # gamma-photon energy channel
+                        "(x,y,z)": [[e_strength_keV], [frequency_Hz]],
+                        ...
+                    }
+                },
+                "file_info": {             # metadata of the received file
+                    "format": <str>,
+                    "size_bytes": <int>,
+                    "original_shape": [<int>, ...],
+                    "dtype": <str>
                 }
             }
         }
 
     Position keys use ``(x, y, z)`` convention where x is the column index
     and z is the slice index (screen number).
+
+    Energy values are scaled by the normalised voxel intensity (0-1):
+    * Elektron e_strength — up to ``_ELECTRON_ENERGY_KEV`` keV.
+    * Photon   e_strength — up to ``_PHOTON_ENERGY_KEV``   keV.
+    Frequencies follow E = h·f, giving Hz values proportional to energy.
     """
     data = _ensure_3d(data)
 
@@ -79,20 +125,39 @@ def _build_result(data: np.ndarray) -> dict:
 
     normalised = _normalize(data)
 
-    energetic_map: dict[str, float] = {}
+    elektron_map: dict[str, list] = {}
+    photon_map: dict[str, list] = {}
+
     for z in range(height):
         for y in range(rows):
             for x in range(cols):
                 pos = f"({x},{y},{z})"
-                energetic_map[pos] = round(float(normalised[z, y, x]), 6)
+                intensity = round(float(normalised[z, y, x]), 6)
 
-    return {
+                elektron_map[pos] = [
+                    [round(intensity * _ELECTRON_ENERGY_KEV, 6)],
+                    [round(intensity * _ELECTRON_FREQ_HZ, 6)],
+                ]
+                photon_map[pos] = [
+                    [round(intensity * _PHOTON_ENERGY_KEV, 6)],
+                    [round(intensity * _PHOTON_FREQ_HZ, 6)],
+                ]
+
+    result: dict = {
         "data:3d": {
             "height": height,
             "amount_positions": amount_positions,
-            "energetic_map": energetic_map,
+            "energetic_map": {
+                "Elektron": elektron_map,
+                "Photon": photon_map,
+            },
         }
     }
+
+    if file_info is not None:
+        result["data:3d"]["file_info"] = file_info
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +270,9 @@ class BrainFileProcessor:
         -------
         dict
             ``{"data:3d": {"height": int, "amount_positions": int,
-            "energetic_map": dict[str, float]}}``
+            "energetic_map": {"Elektron": {...}, "Photon": {...}},
+            "file_info": {"format": str, "size_bytes": int,
+            "original_shape": list[int], "dtype": str}}}``
         """
         if not file_bytes:
             raise ValueError("file_bytes must not be empty.")
@@ -220,4 +287,12 @@ class BrainFileProcessor:
             )
 
         data = loader(file_bytes)
-        return _build_result(data)
+
+        file_info: dict = {
+            "format": fmt,
+            "size_bytes": len(file_bytes),
+            "original_shape": list(data.shape),
+            "dtype": str(data.dtype),
+        }
+
+        return _build_result(data, file_info=file_info)
